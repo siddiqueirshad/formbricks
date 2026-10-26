@@ -333,8 +333,55 @@ describe("Users Lib", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.type).toBe("conflict");
+        expect(result.error.details[0].field).toBe("role");
       }
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    test("blocks deactivating the organization's last owner", async () => {
+      runInTransaction();
+      lockedAccount();
+      (prisma.user.findFirst as any).mockResolvedValueOnce({
+        ...mockUser,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+      });
+      (prisma.membership.count as any).mockResolvedValueOnce(1);
+
+      const result = await updateUser({ email: mockUser.email, isActive: false }, "org456");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("conflict");
+        expect(result.error.details[0].field).toBe("isActive");
+      }
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    test("allows deactivating an owner when the organization has another active owner", async () => {
+      runInTransaction();
+      lockedAccount();
+      (prisma.user.findFirst as any).mockResolvedValueOnce({
+        ...mockUser,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+        teamUsers: [],
+      });
+      (prisma.membership.count as any).mockResolvedValueOnce(2);
+      (prisma.team.findMany as any).mockResolvedValueOnce([]);
+      (prisma.user.update as any).mockResolvedValueOnce({
+        ...mockUser,
+        isActive: false,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+      });
+
+      const result = await updateUser({ email: mockUser.email, isActive: false }, "org456");
+
+      expect(result.ok).toBe(true);
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: mockUser.id },
+          data: expect.objectContaining({ isActive: false }),
+        })
+      );
     });
 
     test("allows demoting an owner when the organization has another owner", async () => {

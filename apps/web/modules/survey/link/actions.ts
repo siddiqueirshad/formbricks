@@ -54,9 +54,12 @@ export const sendLinkSurveyEmailAction = actionClient
         unmatchedExplicitLanguage: "fallback",
       }) ?? "default";
 
+    // The name and logo come from the stored survey and its organization, never the request: a caller
+    // could otherwise put text of their choosing into an email sent from this instance (ENG-4043).
     await sendLinkSurveyToVerifiedEmail({
       ...parsedInput,
       surveyLanguageCode,
+      surveyName: survey.name,
       logoUrl: organizationLogoUrl || "",
     });
     return { success: true };

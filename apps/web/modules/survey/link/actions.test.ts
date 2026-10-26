@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ResourceNotFoundError } from "@formbricks/types/errors";
+import { getOrganizationLogoUrl } from "@/modules/ee/whitelabel/email-customization/lib/organization";
 import { sendLinkSurveyToVerifiedEmail } from "@/modules/email";
 import { sendLinkSurveyEmailAction, validateSurveyPinAction } from "./actions";
 import { getSurveyWithMetadata } from "./lib/data";
@@ -53,7 +54,7 @@ const mockSurvey = (overrides: Record<string, unknown> = {}) =>
 const validatePin = (pin = "1234") => validateSurveyPinAction({ parsedInput: { surveyId, pin } } as never);
 const sendEmail = () =>
   sendLinkSurveyEmailAction({
-    parsedInput: { surveyId, email: "respondent@example.com", surveyName: "s", suId: "" },
+    parsedInput: { surveyId, email: "respondent@example.com", suId: "" },
   } as never);
 
 // Every way a survey can exist without respondents being able to take it from its public link.
@@ -130,5 +131,25 @@ describe("sendLinkSurveyEmailAction", () => {
 
     await expect(sendEmail()).resolves.toEqual({ success: true });
     expect(sendLinkSurveyToVerifiedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  // ENG-4043: the action is public, so a caller must not choose what the email says or shows. The schema
+  // already drops these fields; this pins that the action overrides them even if one got through.
+  test("emails the stored survey name and the organization's logo, not ones the caller sent", async () => {
+    mockSurvey({ name: "Stored survey name" });
+    vi.mocked(getOrganizationLogoUrl).mockResolvedValueOnce("/storage/org-logo.png");
+
+    await sendLinkSurveyEmailAction({
+      parsedInput: {
+        surveyId,
+        email: "respondent@example.com",
+        surveyName: "Call +1 555 0100 about your refund",
+        logoUrl: "https://attacker.example/logo.png",
+      },
+    } as never);
+
+    expect(sendLinkSurveyToVerifiedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ surveyName: "Stored survey name", logoUrl: "/storage/org-logo.png" })
+    );
   });
 });

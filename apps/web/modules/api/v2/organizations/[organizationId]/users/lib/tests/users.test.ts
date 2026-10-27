@@ -333,8 +333,56 @@ describe("Users Lib", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.type).toBe("conflict");
+        expect(result.error.details).toEqual([
+          { field: "role", issue: "Cannot remove the last owner of the organization" },
+        ]);
       }
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    test("blocks deactivating the organization's last owner", async () => {
+      lockedAccount({ isActive: true });
+      (prisma.$transaction as any).mockImplementationOnce((callback: any) => callback(prisma));
+      (prisma.user.findFirst as any).mockResolvedValueOnce({
+        ...mockUser,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+      });
+      (prisma.membership.count as any).mockResolvedValueOnce(1);
+
+      const result = await updateUser({ email: mockUser.email, isActive: false }, "org456");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.type).toBe("conflict");
+        expect(result.error.details).toEqual([
+          { field: "isActive", issue: "Cannot remove the last owner of the organization" },
+        ]);
+      }
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    test("allows deactivating an owner when the organization has another owner", async () => {
+      lockedAccount({ isActive: true });
+      (prisma.$transaction as any).mockImplementationOnce((callback: any) => callback(prisma));
+      (prisma.user.findFirst as any).mockResolvedValueOnce({
+        ...mockUser,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+        teamUsers: [],
+      });
+      (prisma.membership.count as any).mockResolvedValueOnce(2);
+      (prisma.team.findMany as any).mockResolvedValueOnce([]);
+      (prisma.user.update as any).mockResolvedValueOnce({
+        ...mockUser,
+        isActive: false,
+        memberships: [{ organizationId: "org456", role: "owner" }],
+      });
+
+      const result = await updateUser({ email: mockUser.email, isActive: false }, "org456");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.isActive).toBe(false);
+      }
     });
 
     test("allows demoting an owner when the organization has another owner", async () => {

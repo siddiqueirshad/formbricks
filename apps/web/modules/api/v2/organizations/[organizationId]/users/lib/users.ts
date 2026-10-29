@@ -173,7 +173,11 @@ export const createUser = async (
 
 // Thrown inside updateUser's transaction to carry the last-owner conflict out through the
 // generic catch block below without it being reported as an internal_server_error.
-class LastOwnerConflictError extends Error {}
+class LastOwnerConflictError extends Error {
+  constructor(readonly field: "role" | "isActive" = "role") {
+    super("Cannot remove the last owner of the organization");
+  }
+}
 
 // Thrown inside updateUser's transaction when the request would change an account-wide field of a
 // user who also belongs to another organization; carried out as a 409, like LastOwnerConflictError:
@@ -286,6 +290,11 @@ export const updateUser = async (
       role &&
       role !== OrganizationRole.owner;
 
+    const isDeactivatingOwner =
+      currentRole === OrganizationRole.owner &&
+      existingUser.isActive &&
+      isActive === false;
+
     // Capture the existing team names for the user (within the authenticated organization).
     existingTeams = existingUser.teamUsers.map((teamUser) => teamUser.team.name);
 
@@ -368,7 +377,7 @@ export const updateUser = async (
 
     const touchesAccountFields = name !== undefined || isActive !== undefined;
 
-    if (isDemotingOwner || touchesAccountFields) {
+    if (isDemotingOwner || isDeactivatingOwner || touchesAccountFields) {
       // The owner-count re-check and the role write must be one atomic unit: read then act in two
       // separate statements lets two callers demoting different owners at once both read "more
       // than one owner" and both writes land, leaving none. Serializable isolation makes Postgres
@@ -390,10 +399,10 @@ export const updateUser = async (
           // a membership another organization was adding while we waited is not seen. That ends the
           // same as this change landing just before the membership did, which this organization was
           // entitled to do, so it is accepted rather than splitting the request across transactions.
-          if (isDemotingOwner) {
+          if (isDemotingOwner || isDeactivatingOwner) {
             const ownerCount = await getOrganizationOwnerCount(organizationId, tx);
             if (ownerCount <= 1) {
-              throw new LastOwnerConflictError();
+              throw new LastOwnerConflictError(isDemotingOwner ? "role" : "isActive");
             }
           }
 
@@ -435,7 +444,7 @@ export const updateUser = async (
           if (reactivating) await reactivateLockedUser(tx, existingUser.id);
           return user;
         },
-        isDemotingOwner ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } : undefined
+        isDemotingOwner || isDeactivatingOwner ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } : undefined
       );
     } else {
       // Update by id so the mutation is bound to the org-scoped lookup above. Email is
@@ -490,7 +499,7 @@ export const updateUser = async (
     if (error instanceof LastOwnerConflictError) {
       return err({
         type: "conflict",
-        details: [{ field: "role", issue: "Cannot remove the last owner of the organization" }],
+        details: [{ field: error.field, issue: "Cannot remove the last owner of the organization" }],
       });
     }
     if (error instanceof AccountFieldsConflictError) {
